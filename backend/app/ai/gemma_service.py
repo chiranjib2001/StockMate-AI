@@ -15,33 +15,67 @@ class GemmaService:
     async def _call_gemma(self, prompt: str, is_json: bool = True) -> Tuple[str, float, Optional[str]]:
         t0 = time.time()
 
-        # 1. Cloud Provider: Groq (Official Google Gemma 2 9B-IT - Free & Ultra Fast)
+        # 1. Cloud Provider: Groq (Open-weights fast cloud inference)
         groq_key = settings.GROQ_API_KEY or (settings.GEMMA_API_KEY if settings.GEMMA_API_KEY.startswith("gsk_") else "")
         if groq_key:
+            for model_id in ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "gemma2-9b-it"]:
+                try:
+                    headers = {
+                        "Authorization": f"Bearer {groq_key}",
+                        "Content-Type": "application/json"
+                    }
+                    body: Dict[str, Any] = {
+                        "model": model_id,
+                        "messages": [
+                            {"role": "system", "content": "You are a precise inventory assistant. Return only valid JSON without markdown wrapping if JSON is requested."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "temperature": 0.2
+                    }
+                    if is_json:
+                        body["response_format"] = {"type": "json_object"}
+
+                    async with httpx.AsyncClient(timeout=25.0) as client:
+                        res = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body)
+                        if res.status_code == 200:
+                            data = res.json()
+                            content = data["choices"][0]["message"]["content"].strip()
+                            latency = time.time() - t0
+                            return content, latency, None
+                        elif is_json:
+                            # Retry once without response_format constraint if model rejected the flag
+                            body.pop("response_format", None)
+                            res2 = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body)
+                            if res2.status_code == 200:
+                                data = res2.json()
+                                content = data["choices"][0]["message"]["content"].strip()
+                                latency = time.time() - t0
+                                return content, latency, None
+                except Exception as e:
+                    print(f"[GemmaService] Groq {model_id} error: {e}")
+
+        # 2. Cloud Provider: Google Gemini API (Free official Google AI Studio key)
+        gemini_key = settings.GEMINI_API_KEY or (settings.GEMMA_API_KEY if settings.GEMMA_API_KEY.startswith("AIza") else "")
+        if gemini_key:
             try:
-                headers = {
-                    "Authorization": f"Bearer {groq_key}",
-                    "Content-Type": "application/json"
-                }
-                body: Dict[str, Any] = {
-                    "model": "gemma2-9b-it",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.2
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
+                body_g = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.2}
                 }
                 if is_json:
-                    body["response_format"] = {"type": "json_object"}
-
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    res = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body)
-                    res.raise_for_status()
-                    data = res.json()
-                    content = data["choices"][0]["message"]["content"].strip()
-                    latency = time.time() - t0
-                    return content, latency, None
+                    body_g["generationConfig"]["responseMimeType"] = "application/json"
+                async with httpx.AsyncClient(timeout=25.0) as client:
+                    res = await client.post(url, json=body_g)
+                    if res.status_code == 200:
+                        data = res.json()
+                        content = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        latency = time.time() - t0
+                        return content, latency, None
             except Exception as e:
-                print(f"[GemmaService] Groq cloud inference error: {e}")
+                print(f"[GemmaService] Gemini error: {e}")
 
-        # 2. Cloud Provider: OpenRouter (Google Gemma 2)
+        # 3. Cloud Provider: OpenRouter (Google Gemma 2)
         if settings.OPENROUTER_API_KEY:
             try:
                 headers = {
@@ -49,17 +83,17 @@ class GemmaService:
                     "Content-Type": "application/json"
                 }
                 body = {
-                    "model": "google/gemma-2-9b-it:free",
+                    "model": "google/gemma-2-9b-it",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.2
                 }
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     res = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body)
-                    res.raise_for_status()
-                    data = res.json()
-                    content = data["choices"][0]["message"]["content"].strip()
-                    latency = time.time() - t0
-                    return content, latency, None
+                    if res.status_code == 200:
+                        data = res.json()
+                        content = data["choices"][0]["message"]["content"].strip()
+                        latency = time.time() - t0
+                        return content, latency, None
             except Exception as e:
                 print(f"[GemmaService] OpenRouter cloud inference error: {e}")
 
