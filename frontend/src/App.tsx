@@ -27,9 +27,18 @@ export const App: React.FC = () => {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [selectedProductForPrivacy, setSelectedProductForPrivacy] = useState<Product | undefined>();
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [systemHealth, setSystemHealth] = useState({
+    database: 'MongoDB Atlas',
+    ai_model: 'Gemma 2'
+  });
 
   useEffect(() => {
     refreshAllData();
+    api.getHealth().then((h) => {
+      if (h && h.database) {
+        setSystemHealth({ database: h.database, ai_model: h.ai_model });
+      }
+    });
   }, []);
 
   const refreshAllData = async () => {
@@ -127,6 +136,7 @@ export const App: React.FC = () => {
         onOpenAskAI={() => setIsAskOpen(true)}
         onOpenPrivacyModal={() => setIsPrivacyOpen(true)}
         onOpenAddProduct={() => setIsAddOpen(true)}
+        modelBadge={systemHealth.ai_model}
       />
 
       {/* Main Container */}
@@ -182,17 +192,17 @@ export const App: React.FC = () => {
                     <h4 style={{ color: '#ffffff', fontSize: '1rem', fontWeight: 700 }}>Open-Weight AI Pipeline</h4>
                   </div>
                   <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: '16px' }}>
-                    Running <strong>Google Gemma 2:2b</strong> on local Ollama inference. User statements are sanitized via strict field-filtering regexes and whitelist projections before reasoning.
+                    Running <strong>{systemHealth.ai_model}</strong> with zero-leak privacy sanitization. User statements are filtered via whitelist projections before reasoning.
                   </p>
 
                   <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '12px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                       <span>Model Inference:</span>
-                      <strong style={{ color: '#34d399' }}>Local Ollama (Active)</strong>
+                      <strong style={{ color: '#34d399' }}>{systemHealth.ai_model}</strong>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                       <span>Storage Engine:</span>
-                      <strong style={{ color: '#38bdf8' }}>MongoDB Replica-Safe</strong>
+                      <strong style={{ color: '#38bdf8' }}>{systemHealth.database}</strong>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span>PII Redaction Policy:</span>

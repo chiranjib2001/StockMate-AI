@@ -76,9 +76,30 @@ export interface AIAuditLog {
   created_at: string;
 }
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) || "http://127.0.0.1:8000/api";
+function resolveApiBase(): string {
+  const envUrl = (import.meta.env.VITE_API_BASE_URL as string)?.trim();
+  if (!envUrl) {
+    return "http://127.0.0.1:8000/api";
+  }
+  let clean = envUrl.replace(/\/+$/, "");
+  if (!clean.endsWith("/api")) {
+    clean = `${clean}/api`;
+  }
+  return clean;
+}
+
+const API_BASE = resolveApiBase();
 
 export const api = {
+  // System Health
+  async getHealth(): Promise<{ status: string; app: string; database: string; ai_model: string }> {
+    try {
+      const res = await fetch(`${API_BASE}/health`);
+      if (res.ok) return await res.json();
+    } catch (_) {}
+    return { status: "unknown", app: "StockMate AI", database: "MongoDB Atlas", ai_model: "Gemma 2" };
+  },
+
   // Products
   async getProducts(search?: string, category?: string): Promise<Product[]> {
     const params = new URLSearchParams();

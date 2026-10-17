@@ -7,6 +7,7 @@ interface NavbarProps {
   onOpenAskAI: () => void;
   onOpenPrivacyModal: () => void;
   onOpenAddProduct: () => void;
+  modelBadge?: string;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -14,7 +15,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   setActiveTab,
   onOpenAskAI,
   onOpenPrivacyModal,
-  onOpenAddProduct
+  onOpenAddProduct,
+  modelBadge
 }) => {
   return (
     <header style={{
@@ -54,7 +56,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 StockMate AI
               </h1>
               <span className="badge badge-purple" style={{ fontSize: '0.68rem', padding: '2px 7px' }}>
-                Gemma 2:2b
+                {modelBadge || "Gemma 2"}
               </span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'var(--text-subtle)', fontWeight: 500 }}>

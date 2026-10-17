@@ -28,22 +28,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register routes
-app.include_router(products.router, prefix=settings.API_PREFIX)
-app.include_router(movements.router, prefix=settings.API_PREFIX)
-app.include_router(analytics.router, prefix=settings.API_PREFIX)
-app.include_router(ai.router, prefix=settings.API_PREFIX)
+# Register routes under canonical /api prefix and root fallback
+for pfx in [settings.API_PREFIX, ""]:
+    app.include_router(products.router, prefix=pfx)
+    app.include_router(movements.router, prefix=pfx)
+    app.include_router(analytics.router, prefix=pfx)
+    app.include_router(ai.router, prefix=pfx)
 
-@app.get("/")
-async def root():
+def get_health_data():
+    if settings.GROQ_API_KEY or (settings.GEMMA_API_KEY and settings.GEMMA_API_KEY.startswith("gsk_")):
+        ai_info = "Google Gemma 2:9B (Groq Cloud)"
+    elif settings.OPENROUTER_API_KEY:
+        ai_info = "Google Gemma 2:9B (OpenRouter Cloud)"
+    else:
+        ai_info = f"Google {settings.GEMMA_MODEL} (Local Ollama)"
+
     return {
         "status": "online",
         "app": settings.PROJECT_NAME,
         "version": settings.VERSION,
-        "database": "MongoDB" if db.is_mongodb_connected else "Local Engine (JSON)",
-        "ai_model": settings.GEMMA_MODEL,
+        "database": "MongoDB Atlas" if db.is_mongodb_connected else "Local Engine (JSON)",
+        "ai_model": ai_info,
         "docs_url": "/docs"
     }
+
+@app.get("/")
+async def root():
+    return get_health_data()
+
+@app.get("/api/health")
+async def health():
+    return get_health_data()
 
 if __name__ == "__main__":
     import uvicorn
