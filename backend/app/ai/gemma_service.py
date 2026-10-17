@@ -14,6 +14,56 @@ class GemmaService:
 
     async def _call_gemma(self, prompt: str, is_json: bool = True) -> Tuple[str, float, Optional[str]]:
         t0 = time.time()
+
+        # 1. Cloud Provider: Groq (Official Google Gemma 2 9B-IT - Free & Ultra Fast)
+        groq_key = settings.GROQ_API_KEY or (settings.GEMMA_API_KEY if settings.GEMMA_API_KEY.startswith("gsk_") else "")
+        if groq_key:
+            try:
+                headers = {
+                    "Authorization": f"Bearer {groq_key}",
+                    "Content-Type": "application/json"
+                }
+                body: Dict[str, Any] = {
+                    "model": "gemma2-9b-it",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.2
+                }
+                if is_json:
+                    body["response_format"] = {"type": "json_object"}
+
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    res = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body)
+                    res.raise_for_status()
+                    data = res.json()
+                    content = data["choices"][0]["message"]["content"].strip()
+                    latency = time.time() - t0
+                    return content, latency, None
+            except Exception as e:
+                print(f"[GemmaService] Groq cloud inference error: {e}")
+
+        # 2. Cloud Provider: OpenRouter (Google Gemma 2)
+        if settings.OPENROUTER_API_KEY:
+            try:
+                headers = {
+                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                body = {
+                    "model": "google/gemma-2-9b-it:free",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.2
+                }
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    res = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body)
+                    res.raise_for_status()
+                    data = res.json()
+                    content = data["choices"][0]["message"]["content"].strip()
+                    latency = time.time() - t0
+                    return content, latency, None
+            except Exception as e:
+                print(f"[GemmaService] OpenRouter cloud inference error: {e}")
+
+        # 3. Local Ollama (Default when running locally)
         payload = {
             "model": self.model_name,
             "prompt": prompt,
@@ -23,7 +73,7 @@ class GemmaService:
             payload["format"] = "json"
 
         try:
-            async with httpx.AsyncClient(timeout=45.0) as client:
+            async with httpx.AsyncClient(timeout=40.0) as client:
                 res = await client.post(self.ollama_url, json=payload)
                 res.raise_for_status()
                 data = res.json()
@@ -31,7 +81,7 @@ class GemmaService:
                 return data.get("response", "").strip(), latency, None
         except Exception as e:
             latency = time.time() - t0
-            print(f"[GemmaService] Ollama call error: {e}")
+            print(f"[GemmaService] Ollama local call error: {e}")
             return "", latency, str(e)
 
     async def parse_natural_language_intent(
