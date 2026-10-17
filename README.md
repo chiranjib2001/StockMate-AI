@@ -108,6 +108,16 @@ flowchart TD
     Deterministic Engine <--> DB
 ```
 
+### ☁️ Hybrid Open-Weight AI Inference (Local & Cloud)
+
+StockMate AI is architected to run seamlessly across both private local hardware and production cloud environments:
+
+* **🏠 Local Private Mode (Default):** Runs completely offline using **Ollama** (`gemma2:2b`). No external data connection is needed.
+* **🌐 Production Cloud Deployments (e.g., Render):** In remote cloud hosting environments where local Ollama on `localhost` cannot be reached and container memory is limited, StockMate AI automatically transitions to cloud open-weight providers:
+  * **OpenRouter (`OPENROUTER_API_KEY`):** Connects to Google Gemma (`google/gemma-4-26b-a4b-it:free`) and open-weight models. Features built-in **multi-key rotation** (supports comma-separated keys) and automatic fallback cascading if upstream shared pools experience temporary rate limits (`429`).
+  * **Groq (`GROQ_API_KEY`):** High-speed open-weight reasoning (~0.3s latency).
+  * **Google AI Studio (`GEMINI_API_KEY`):** Direct Google AI API integration.
+
 ---
 
 ## 🔒 Privacy Guard: Whitelist Comparison

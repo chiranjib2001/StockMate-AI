@@ -39,7 +39,7 @@ def get_health_data():
     if settings.GROQ_API_KEY or (settings.GEMMA_API_KEY and settings.GEMMA_API_KEY.startswith("gsk_")):
         ai_info = "Google Gemma 2:9B (Groq Cloud)"
     elif settings.OPENROUTER_API_KEY:
-        ai_info = "Google Gemma 2:9B (OpenRouter Cloud)"
+        ai_info = "Google Gemma 4:26B (OpenRouter Cloud)"
     else:
         ai_info = f"Google {settings.GEMMA_MODEL} (Local Ollama)"
 

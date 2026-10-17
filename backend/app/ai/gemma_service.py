@@ -75,27 +75,44 @@ class GemmaService:
             except Exception as e:
                 print(f"[GemmaService] Gemini error: {e}")
 
-        # 3. Cloud Provider: OpenRouter (Google Gemma 2)
+        # 3. Cloud Provider: OpenRouter (Google Gemma Free Tier with Key Rotation)
         if settings.OPENROUTER_API_KEY:
-            try:
-                headers = {
-                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json"
-                }
-                body = {
-                    "model": "google/gemma-2-9b-it",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.2
-                }
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    res = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body)
-                    if res.status_code == 200:
-                        data = res.json()
-                        content = data["choices"][0]["message"]["content"].strip()
-                        latency = time.time() - t0
-                        return content, latency, None
-            except Exception as e:
-                print(f"[GemmaService] OpenRouter cloud inference error: {e}")
+            clean_raw = settings.OPENROUTER_API_KEY.strip().strip('"\'')
+            openrouter_keys = [k.strip().strip('"\'') for k in clean_raw.split(",") if k.strip()]
+            candidate_models = [
+                "google/gemma-4-26b-a4b-it:free",
+                "google/gemma-4-31b-it:free",
+                "liquid/lfm-2.5-2.6b:free",
+                "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+            ]
+            for model_id in candidate_models:
+                for or_key in openrouter_keys:
+                    try:
+                        headers = {
+                            "Authorization": f"Bearer {or_key}",
+                            "HTTP-Referer": "https://stockmate.chiranjib.tech",
+                            "X-Title": "StockMate AI",
+                            "Content-Type": "application/json"
+                        }
+                        body = {
+                            "model": model_id,
+                            "messages": [
+                                {"role": "system", "content": "You are a precise inventory assistant. Return only valid JSON without markdown wrapping if JSON is requested."},
+                                {"role": "user", "content": prompt}
+                            ],
+                            "temperature": 0.2
+                        }
+                        async with httpx.AsyncClient(timeout=20.0) as client:
+                            res = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body)
+                            if res.status_code == 200:
+                                data = res.json()
+                                content = data["choices"][0]["message"]["content"].strip()
+                                latency = time.time() - t0
+                                return content, latency, None
+                            elif res.status_code == 429:
+                                continue
+                    except Exception as e:
+                        print(f"[GemmaService] OpenRouter {model_id} error: {e}")
 
         # 3. Local Ollama (Default when running locally)
         payload = {
