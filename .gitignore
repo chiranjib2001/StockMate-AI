@@ -43,3 +43,6 @@ backend/data/*.json
 .DS_Store
 Thumbs.db
 *.log
+
+# Local Development & Planning
+devPlan.md
