@@ -1,3 +1,4 @@
+import re
 import json
 import time
 import httpx
@@ -11,6 +12,113 @@ class GemmaService:
     def __init__(self):
         self.ollama_url = f"{settings.OLLAMA_BASE_URL}/api/generate"
         self.model_name = settings.GEMMA_MODEL
+
+    def _extract_json(self, text: str) -> Optional[Dict[str, Any]]:
+        if not text:
+            return None
+        clean = text.strip()
+        if "```" in clean:
+            match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', clean)
+            if match:
+                clean = match.group(1)
+        obj_match = re.search(r'(\{[\s\S]*\})', clean)
+        if obj_match:
+            clean = obj_match.group(1)
+        try:
+            return json.loads(clean)
+        except Exception:
+            return None
+
+    def _match_product(self, target_name: str, clean_input: str, current_products: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not current_products:
+            return None
+
+        target = target_name.strip().lower()
+        full_text = clean_input.strip().lower()
+
+        # Pass 1: Direct substring or SKU match
+        if target:
+            for p in current_products:
+                p_name = p.get("name", "").lower()
+                p_sku = p.get("sku", "").lower()
+                if target in p_name or p_name in target or target == p_sku:
+                    return p
+
+        # Pass 2: Meaningful token overlap across product names, categories, and input
+        stopwords = {
+            "received", "restock", "restocked", "sold", "sale", "broke", "broken",
+            "loss", "from", "supplier", "in", "store", "the", "a", "an", "today",
+            "yesterday", "units", "unit", "pieces", "piece", "items", "item", "box",
+            "boxes", "bag", "bags", "transit", "during", "and", "for", "with"
+        }
+        combined = f"{target} {full_text}"
+        query_tokens = [w for w in re.findall(r'\b[a-z]{3,}\b', combined) if w not in stopwords]
+
+        best_prod = None
+        best_score = 0
+        for p in current_products:
+            p_name = p.get("name", "").lower()
+            p_cat = p.get("category", "").lower()
+            p_sku = p.get("sku", "").lower()
+            prod_tokens = set(re.findall(r'\b[a-z]{3,}\b', f"{p_name} {p_cat} {p_sku}"))
+
+            score = 0
+            for qt in query_tokens:
+                if qt in prod_tokens:
+                    score += 2
+                elif any(qt in pt or pt in qt for pt in prod_tokens):
+                    score += 1
+
+            if score > best_score:
+                best_score = score
+                best_prod = p
+
+        if best_score >= 1:
+            return best_prod
+        return None
+
+    def _deterministic_intent_extract(self, clean_input: str, current_products: List[Dict[str, Any]]) -> Dict[str, Any]:
+        text = clean_input.lower()
+
+        # Action classification
+        if any(w in text for w in ["received", "restock", "restocked", "delivered", "got", "bought from", "bought", "replenish", "added", "ordered"]):
+            action = "restock"
+            delta_mult = 1
+        elif any(w in text for w in ["sold", "sale", "bought by customer", "dispensed"]):
+            action = "sale"
+            delta_mult = -1
+        elif any(w in text for w in ["broke", "broken", "damaged", "lost", "loss", "waste", "expired", "spoiled", "write-off"]):
+            action = "loss"
+            delta_mult = -1
+        elif any(w in text for w in ["return", "returned", "refund"]):
+            action = "return"
+            delta_mult = 1
+        else:
+            action = "adjustment"
+            delta_mult = 1
+
+        # Quantity extraction
+        num_match = re.search(r'\b(\d+)\b', text)
+        qty = int(num_match.group(1)) if num_match else 1
+
+        matched_prod = self._match_product("", clean_input, current_products)
+        prod_name = matched_prod.get("name") if matched_prod else clean_input
+        confidence = 0.95 if matched_prod else 0.55
+        reasoning = (
+            f"Deterministic safe mode: detected '{action}' of {qty} units matched to '{matched_prod['name']}'"
+            if matched_prod else
+            f"Deterministic safe mode: detected '{action}' of {qty} units (catalog match pending)"
+        )
+
+        return {
+            "action": action,
+            "product_name": prod_name,
+            "quantity": qty,
+            "delta_mult": delta_mult,
+            "matched_prod": matched_prod,
+            "confidence": confidence,
+            "reasoning": reasoning
+        }
 
     async def _call_gemma(self, prompt: str, is_json: bool = True) -> Tuple[str, float, Optional[str]]:
         t0 = time.time()
@@ -183,52 +291,65 @@ Output MUST be valid JSON in this exact structure:
 
         raw_resp, latency, err = await self._call_gemma(system_prompt, is_json=True)
 
-        # Fallback if Ollama error
-        parsed = {}
-        if not err and raw_resp:
+        parsed_json = self._extract_json(raw_resp) if (raw_resp and not err) else None
+
+        if parsed_json and isinstance(parsed_json, dict):
+            # 1. AI Output Parsed Successfully
+            action = str(parsed_json.get("action", "adjustment")).lower()
+            ai_qty = parsed_json.get("quantity")
             try:
-                parsed = json.loads(raw_resp)
-            except Exception:
-                parsed = {"action": "unknown", "product_name": "", "quantity": 0, "confidence": 0.0, "reasoning": raw_resp}
-        else:
-            parsed = {
-                "action": "adjustment",
-                "product_name": clean_input,
-                "quantity": 1,
-                "confidence": 0.5,
-                "reasoning": f"Local rule fallback (Ollama message: {err})"
+                qty = int(ai_qty) if ai_qty is not None else 0
+            except (ValueError, TypeError):
+                qty = 0
+
+            # If LLM returned 0 quantity but user specified a number, recover with regex
+            if qty <= 0:
+                num_match = re.search(r'\b(\d+)\b', clean_input)
+                qty = int(num_match.group(1)) if num_match else 1
+
+            target_name = str(parsed_json.get("product_name", ""))
+            matched_prod = self._match_product(target_name, clean_input, current_products)
+
+            delta = qty if action in ["restock", "new_product", "return"] else -qty if action in ["sale", "loss"] else qty
+            current_qty = matched_prod.get("quantity_on_hand", 0) if matched_prod else 0
+            new_qty = max(0, current_qty + delta) if matched_prod else qty
+
+            result = {
+                "action": action,
+                "product_name": matched_prod.get("name") if matched_prod else target_name or clean_input,
+                "matched_product_id": matched_prod.get("id") if matched_prod else None,
+                "matched_product_name": matched_prod.get("name") if matched_prod else "Unmatched / New Item",
+                "current_stock": current_qty,
+                "quantity": qty,
+                "proposed_delta": delta,
+                "new_stock": new_qty,
+                "confidence": float(parsed_json.get("confidence", 0.9)),
+                "explanation": str(parsed_json.get("reasoning", f"Gemma extracted intent: {action} {qty} units")),
+                "needs_confirmation": True
             }
+        else:
+            # 2. Deterministic Safe Mode Fallback (Zero-Hallucination)
+            det = self._deterministic_intent_extract(clean_input, current_products)
+            matched_prod = det["matched_prod"]
+            qty = det["quantity"]
+            action = det["action"]
+            delta = det["delta_mult"] * qty
+            current_qty = matched_prod.get("quantity_on_hand", 0) if matched_prod else 0
+            new_qty = max(0, current_qty + delta) if matched_prod else qty
 
-        # Step 3: Match with real product in DB
-        target_name = parsed.get("product_name", "").lower()
-        matched_prod = None
-        for p in current_products:
-            p_name = p.get("name", "").lower()
-            if target_name in p_name or p_name in target_name:
-                matched_prod = p
-                break
-        
-        # If no exact match, fallback to first product or none
-        action = parsed.get("action", "adjustment").lower()
-        qty = int(parsed.get("quantity", 0))
-        delta = qty if action in ["restock", "new_product"] else -qty if action in ["sale", "loss"] else qty
-
-        current_qty = matched_prod.get("quantity_on_hand", 0) if matched_prod else 0
-        new_qty = max(0, current_qty + delta) if matched_prod else qty
-
-        result = {
-            "action": action,
-            "product_name": parsed.get("product_name", raw_user_input),
-            "matched_product_id": matched_prod.get("id") if matched_prod else None,
-            "matched_product_name": matched_prod.get("name") if matched_prod else "Unmatched / New Item",
-            "current_stock": current_qty,
-            "quantity": qty,
-            "proposed_delta": delta,
-            "new_stock": new_qty,
-            "confidence": float(parsed.get("confidence", 0.85)),
-            "explanation": parsed.get("reasoning", "Parsed from natural language input"),
-            "needs_confirmation": True
-        }
+            result = {
+                "action": action,
+                "product_name": det["product_name"],
+                "matched_product_id": matched_prod.get("id") if matched_prod else None,
+                "matched_product_name": matched_prod.get("name") if matched_prod else "Unmatched / New Item",
+                "current_stock": current_qty,
+                "quantity": qty,
+                "proposed_delta": delta,
+                "new_stock": new_qty,
+                "confidence": det["confidence"],
+                "explanation": det["reasoning"],
+                "needs_confirmation": True
+            }
 
         # Step 4: Record privacy-safe AI Audit Log
         await db.log_ai_audit({

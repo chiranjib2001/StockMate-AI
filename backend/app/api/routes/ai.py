@@ -112,3 +112,59 @@ async def preview_masking_comparison():
 @router.get("/audit-logs", response_model=List[AIAuditLog])
 async def get_audit_logs(limit: int = 25):
     return await db.get_ai_audits(limit=limit)
+
+@router.get("/diagnostics")
+async def ai_diagnostics():
+    import httpx
+    from app.core.config import settings
+
+    diag: Dict[str, Any] = {}
+
+    # 1. Groq Check
+    groq_key = settings.GROQ_API_KEY or (settings.GEMMA_API_KEY if settings.GEMMA_API_KEY.startswith("gsk_") else "")
+    if groq_key:
+        masked_groq = groq_key[:8] + "..." + groq_key[-4:] if len(groq_key) > 12 else "present"
+        diag["groq"] = {"key": masked_groq}
+        try:
+            headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+            body = {"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5}
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body)
+                diag["groq"]["status"] = r.status_code
+                diag["groq"]["response"] = r.text[:100]
+        except Exception as e:
+            diag["groq"]["error"] = str(e)
+    else:
+        diag["groq"] = "not_set"
+
+    # 2. OpenRouter Check
+    if settings.OPENROUTER_API_KEY:
+        clean_raw = settings.OPENROUTER_API_KEY.strip().strip('"\'')
+        keys = [k.strip().strip('"\'') for k in clean_raw.split(",") if k.strip()]
+        diag["openrouter"] = {"keys_count": len(keys)}
+        if keys:
+            first_key = keys[0]
+            masked_or = first_key[:12] + "..." + first_key[-4:] if len(first_key) > 16 else "present"
+            diag["openrouter"]["first_key"] = masked_or
+            try:
+                headers = {
+                    "Authorization": f"Bearer {first_key}",
+                    "HTTP-Referer": "https://stockmate.chiranjib.tech",
+                    "X-Title": "StockMate AI",
+                    "Content-Type": "application/json"
+                }
+                body = {"model": "google/gemma-4-26b-a4b-it:free", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5}
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    r = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=body)
+                    diag["openrouter"]["status"] = r.status_code
+                    diag["openrouter"]["response"] = r.text[:120]
+            except Exception as e:
+                diag["openrouter"]["error"] = str(e)
+    else:
+        diag["openrouter"] = "not_set"
+
+    # 3. Gemini Check
+    gemini_key = settings.GEMINI_API_KEY or (settings.GEMMA_API_KEY if settings.GEMMA_API_KEY.startswith("AIza") else "")
+    diag["gemini"] = "present" if gemini_key else "not_set"
+
+    return diag
